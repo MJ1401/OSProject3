@@ -4,15 +4,15 @@ use nix::{unistd::{fork, pipe, close, dup2, execvp, ForkResult}, sys::{wait::wai
 fn main() -> anyhow::Result<()> {
     // From https://doc.rust-lang.org/std/env/fn.current_dir.html
     let path = env::current_dir()?;
-    println!("The current directory is {}", path.display());
+    eprintln!("The current directory is {}", path.display());
     // Modified from https://github.com/gjf2a/shell/blob/master/src/bin/typing_demo.rs
     loop {
         let user_input = process_line()?;
         if user_input.trim() == "exit" {
-            println!("You have exited the vssh");
+            eprintln!("You have exited the vssh");
             break;
         } else if user_input.trim() == "" {
-            println!("You didn't enter anything")
+            eprintln!("You didn't enter anything")
         } else {
             let words: Vec<&str> = user_input.split_whitespace().collect();
             if words[0].trim() == "cd" {
@@ -23,9 +23,9 @@ fn main() -> anyhow::Result<()> {
                     let root = Path::new(new_path); 
                     match env::set_current_dir(&root) {
                         Ok(()) => {//assert!(env::set_current_dir(&root).is_ok()); // Will panic if directory doesn't exist
-                        println!("Successfully changed working directory to {}!", root.display());
+                        eprintln!("Successfully changed working directory to {}!", root.display());
                         let path = env::current_dir()?;
-                        println!("The current directory is {}", new_path.display());
+                        eprintln!("The current directory is {}", new_path.display());
                     }
                         Err(e) => {println!("{}", e);}
                     }
@@ -33,8 +33,8 @@ fn main() -> anyhow::Result<()> {
                 }
             } else {
                 match fork_time(user_input.as_str()) {
-                    Ok(_) => {println!("Fork was successful");},
-                    Err(e) => {println!("Could not fork: {e}");},
+                    Ok(_) => {eprintln!("Fork was successful");},
+                    Err(e) => {eprintln!("Could not fork: {e}");},
                 }
             }
         }
@@ -44,9 +44,9 @@ fn main() -> anyhow::Result<()> {
 
 // Modified from https://github.com/gjf2a/shell/blob/master/src/bin/typing_demo.rs
 fn process_line() -> anyhow::Result<String> {
-    println!("Please enter something");
+    eprintln!("Please enter something");
     let mut user_input = String::new();
-    print!("$ ");
+    eprint!("$ ");
     std::io::stdin().read_line(&mut user_input)?; //https://www.geeksforgeeks.org/standard-i-o-in-rust/
     Ok(user_input)
 }
@@ -59,50 +59,18 @@ fn fork_time(user_input: &str) -> anyhow::Result<()> {
     let pipes = cmds.pipe_cmds;
     let out_file = cmds.output_file;
     let in_file = cmds.input_file;
+    let background = cmds.background;
     match unsafe{fork()} {
         Ok(ForkResult::Parent { child, .. }) => {
-            println!("Starting a fork, new child has pid: {}", child);
-            waitpid(child, None).unwrap();
+            if background {
+            } else {
+                waitpid(child, None).unwrap();
+                eprintln!("Your background work has finished! Please enter a command.")
+            }
         }
         Ok(ForkResult::Child) => {
             let mut fd_out = 1;
-            for p in pipes.iter().skip(1).rev() {
-                let (p_out, p_in) = pipe()?;
-                match unsafe{fork()} {
-                    Ok(ForkResult::Parent { child, .. }) => {
-                        close(p_in)?;
-                        dup2(p_out, 0)?;
-                        dup2(fd_out, 1)?;
-                        let p2 = externalize(p.as_str());
-                        match execvp::<CString>(p2[0].as_c_str(), &p2) {
-                            Ok(_) => {println!("Child finished");},
-                            Err(e) => {
-                                println!("Could not execute: {e}");
-                                std::process::exit(1);
-                            },
-                        }
-                    }
-                    Ok(ForkResult::Child) => {
-                        close(p_out)?;
-                        fd_out = p_in;
-                    }
-                    Err(e) => {println!("Error: {e}")}
-                }
-            }
-            // This isn't quite working how it should be. I get some weird interactions
-
-            // From https://github.com/gjf2a/shell/blob/master/src/bin/fork_ls_demo.rs
-            let cmd = externalize(&pipes[0]);
-            match in_file {
-                Some(ref f) => { // https://doc.rust-lang.org/std/option/
-                    // From https://github.com/gjf2a/shell/blob/master/src/bin/pipe_demo_3.rs
-                    let flags: OFlag = [OFlag::O_RDONLY, OFlag::O_TRUNC].iter().copied().collect();
-                    let mode: Mode = [Mode::S_IRUSR, Mode::S_IWUSR].iter().copied().collect();
-                    let file_out = open(f.to_owned().as_str(), flags, mode)?;
-                    dup2(file_out, 0)?;
-                }
-                None => print!(""),
-            }
+            
             match out_file {
                 Some(ref f) => { // https://doc.rust-lang.org/std/option/
                     // From https://github.com/gjf2a/shell/blob/master/src/bin/pipe_demo_3.rs
@@ -113,11 +81,52 @@ fn fork_time(user_input: &str) -> anyhow::Result<()> {
                 }
                 None => print!(""),
             }
+            for p in pipes.iter().skip(1).rev() {
+                let (p_out, p_in) = pipe()?;
+                match unsafe{fork()} {
+                    Ok(ForkResult::Parent { child, .. }) => {
+                        close(p_in)?;
+                        dup2(p_out, 0)?;
+                        dup2(fd_out, 1)?;
+                        let p2 = externalize(p.as_str());
+                        match execvp::<CString>(p2[0].as_c_str(), &p2) {
+                            Ok(_) => {eprintln!("Child finished");},
+                            Err(e) => {
+                                eprintln!("Could not execute: {e}");
+                                std::process::exit(1);
+                            },
+                        }
+                    }
+                    Ok(ForkResult::Child) => {
+                        close(p_out)?;
+                        fd_out = p_in;
+                    }
+                    Err(e) => {eprintln!("Error: {e}")}
+                }
+            }
+            // This isn't quite working how it should be. I get some weird interactions
+
+            // From https://github.com/gjf2a/shell/blob/master/src/bin/fork_ls_demo.rs
+            let cmd = externalize(&pipes[0]);
+            match in_file {
+                Some(ref f) => { // https://doc.rust-lang.org/std/option/
+                    // From https://github.com/gjf2a/shell/blob/master/src/bin/pipe_demo_3.rs
+                    match file_exist(f.to_owned()) {
+                        true => {
+                            let file_in = open(f.to_owned().as_str(), OFlag::O_RDONLY, Mode::empty())?;
+                            dup2(file_in, 0)?;
+                        },
+                        false => {eprintln!("File {f} does not exist")
+                        },
+                    }
+                }
+                None => print!(""),
+            }
             dup2(fd_out, 1)?;
             match execvp::<CString>(cmd[0].as_c_str(), &cmd) {
-                Ok(_) => {println!("Child finished");},
+                Ok(_) => {eprintln!("Child finished");},
                 Err(e) => {
-                    println!("Could not execute: {e}");
+                    eprintln!("Could not execute: {e}");
                     std::process::exit(1);
                 },
             }
@@ -153,14 +162,14 @@ impl Components {
     }
 
     fn back_check(&mut self, arg: &str) -> String {
-        let last = arg.chars().last().unwrap(); // Modified from https://stackoverflow.com/questions/48642342/how-to-get-the-last-character-of-a-str
         let new_arg = arg.clone();
-        if last == '&' {
+        let actual = &arg[arg.len()-2..arg.len()-1];
+        if actual == "&" {
             self.background = true;
-            let new_arg = &arg[0..arg.len()-1];
+            let new_arg = &arg[0..arg.len()-2];
             return new_arg.to_owned();
         }
-        return new_arg.to_owned();
+        return arg.to_owned();
     }
 
     fn get_pipes(&mut self, line: String) {
